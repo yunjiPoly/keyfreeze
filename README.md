@@ -1,3 +1,5 @@
+One-Prompter message to Claude Opus 5.5
+
 Act as an expert Windows desktop application developer. I want you to write the complete code for a Windows utility similar to "KeyFreeze."
 
 The application's goal is to block all keyboard and mouse input from the user while keeping the screen fully active and visible (useful for cleaning a keyboard or letting a toddler watch a video without interrupting it).
