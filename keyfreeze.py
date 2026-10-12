@@ -338,30 +338,42 @@ class KeyFreezeApp:
         self._show_countdown(seconds)
 
     def _show_countdown(self, seconds):
-        self._overlay = self._make_overlay()
+        # Small always-on-top strip: the countdown is still shown, but the rest
+        # of the screen stays fully visible (nothing is blocked during the
+        # countdown).
+        top = tk.Toplevel(self.root)
+        top.configure(bg="black")
+        top.overrideredirect(True)
+        top.attributes("-topmost", True)
+        try:
+            top.attributes("-alpha", 0.85)
+        except Exception:
+            pass
+
+        screen_w = top.winfo_screenwidth()
+        width, height = 440, 48
+        x = (screen_w - width) // 2
+        top.geometry(f"{width}x{height}+{x}+0")
+
         self._cd_label = tk.Label(
-            self._overlay,
+            top,
             text="",
-            font=tkfont.Font(family="Segoe UI", size=120, weight="bold"),
+            font=tkfont.Font(family="Segoe UI", size=14, weight="bold"),
             fg="white",
             bg="black",
         )
-        self._cd_label.place(relx=0.5, rely=0.42, anchor="center")
-        tk.Label(
-            self._overlay,
-            text="Move your hands away \u2014 input will be blocked\u2026",
-            font=tkfont.Font(family="Segoe UI", size=20),
-            fg="#cccccc",
-            bg="black",
-        ).place(relx=0.5, rely=0.62, anchor="center")
+        self._cd_label.place(relx=0.5, rely=0.5, anchor="center")
 
+        self._overlay = top
         self._tick_countdown(seconds)
 
     def _tick_countdown(self, remaining):
         if remaining <= 0:
             self._engage_lock()
             return
-        self._cd_label.config(text=str(remaining))
+        self._cd_label.config(
+            text=f"Locking input in {remaining} \u2014 move your hands away"
+        )
         self.status.config(text=f"Locking in {remaining}\u2026")
         self._countdown_job = self.root.after(
             1000, lambda: self._tick_countdown(remaining - 1)
@@ -394,7 +406,7 @@ class KeyFreezeApp:
         # IMPORTANT: once input is actually blocked we do NOT cover the screen.
         # The whole point of KeyFreeze is that the screen stays fully visible
         # (e.g. so you can keep watching a video) while keyboard & mouse are
-        # disabled. So we tear down the fullscreen countdown overlay and show a
+        # disabled. So we tear down the countdown strip and show a
         # small, non-fullscreen "locked" banner that stays out of the way.
         self._destroy_overlay()
         self._show_locked_banner()
@@ -456,15 +468,6 @@ class KeyFreezeApp:
         self.status.config(text="Unlocked. Ready.", fg="#2d7d46")
 
     # ---- overlay helpers ------------------------------------------------- #
-    def _make_overlay(self):
-        top = tk.Toplevel(self.root)
-        top.configure(bg="black")
-        top.attributes("-fullscreen", True)
-        top.attributes("-topmost", True)
-        top.overrideredirect(True)
-        top.config(cursor="none")
-        return top
-
     def _destroy_overlay(self):
         if self._overlay is not None:
             try:
