@@ -63,5 +63,22 @@ python keyfreeze.py
 
 ```powershell
 pip install pyinstaller
-pyinstaller --noconsole --onefile keyfreeze.py
+
+# 1. Generate the lock icon (keyfreeze.ico) using only the standard library.
+python build_icon.py
+
+# 2. Build a single-file, no-console exe with that icon.
+pyinstaller --noconsole --onefile --icon keyfreeze.ico --name KeyFreeze keyfreeze.py
 ```
+
+The finished app is `dist\KeyFreeze.exe`.
+
+To put an icon on the desktop (so you can launch it instead of the original
+KeyFreeze), run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File create_shortcut.ps1
+```
+
+That creates a `KeyFreeze.lnk` on your desktop pointing at `dist\KeyFreeze.exe`
+with the padlock icon embedded in the exe.

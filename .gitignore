@@ -1,3 +1,10 @@
 # Byte-compiled / optimized files
 __pycache__/
 *.py[cod]
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+*.ico
+build.log
