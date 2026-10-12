@@ -253,7 +253,7 @@ class InputBlocker:
 # --------------------------------------------------------------------------- #
 class KeyFreezeApp:
     DEFAULT_COUNTDOWN = 5          # seconds before input is blocked (3..5)
-    SAFETY_TIMEOUT_MIN = 1        # auto-unlock after this many minutes
+    SAFETY_TIMEOUT_MIN = 15        # auto-unlock after this many minutes
 
     def __init__(self, root):
         self.root = root
