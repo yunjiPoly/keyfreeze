@@ -18,7 +18,7 @@ How it works:
       thread-safe primitives.
 
 Safety / Unlock:
-    * Hard-coded, always-working unlock hotkey:  Ctrl + Alt + U
+    * Hard-coded, always-working unlock hotkey:  Ctrl + Alt + O
       (detected INSIDE the keyboard hook, so it fires even though every other
       key is blocked).
     * Ctrl + Alt + Del is a Secure Attention Sequence handled by Windows
@@ -55,7 +55,16 @@ WM_QUIT = 0x0012
 # Virtual-key codes we care about for the unlock combo.
 VK_CONTROL = 0x11
 VK_MENU = 0x12       # ALT
-VK_U = 0x55
+VK_O = 0x4F
+# The low-level hook reports modifiers by their LEFT/RIGHT specific codes
+# (e.g. VK_LCONTROL, not VK_CONTROL), so we must track all of them.
+VK_LCONTROL = 0xA2
+VK_RCONTROL = 0xA3
+VK_LMENU = 0xA4
+VK_RMENU = 0xA5
+
+_CTRL_VKS = (VK_CONTROL, VK_LCONTROL, VK_RCONTROL)
+_ALT_VKS = (VK_MENU, VK_LMENU, VK_RMENU)
 
 HC_ACTION = 0
 
@@ -95,9 +104,6 @@ user32.GetMessageW.restype = wt.BOOL
 user32.PostThreadMessageW.argtypes = [wt.DWORD, wt.UINT, wt.WPARAM, wt.LPARAM]
 user32.PostThreadMessageW.restype = wt.BOOL
 
-user32.GetKeyState.argtypes = [ctypes.c_int]
-user32.GetKeyState.restype = ctypes.c_short
-
 kernel32.GetCurrentThreadId.restype = wt.DWORD
 
 
@@ -111,7 +117,7 @@ class InputBlocker:
 
     def __init__(self, on_unlock_hotkey):
         """on_unlock_hotkey: callable invoked (from the hook thread) when the
-        Ctrl+Alt+U combo is detected."""
+        Ctrl+Alt+O combo is detected."""
         self._on_unlock_hotkey = on_unlock_hotkey
         self._thread = None
         self._thread_id = None
@@ -119,6 +125,14 @@ class InputBlocker:
         self._mouse_handle = None
         self._active = False
         self._ready = threading.Event()
+
+        # Ctrl / Alt state for the unlock combo. We track this ourselves
+        # because BOTH GetKeyState() and GetAsyncKeyState() read 0 inside this
+        # hook: swallowing the modifier keydown prevents Windows from updating
+        # its key-state table, so the only reliable source is the hook's own
+        # keydown/keyup events.
+        self._ctrl_down = False
+        self._alt_down = False
 
         # Keep references so the callbacks are not garbage-collected while the
         # hooks are installed (that would crash the process).
@@ -128,17 +142,29 @@ class InputBlocker:
     # ---- the actual hook callbacks (run on the hook thread) --------------- #
     def _keyboard_proc(self, nCode, wParam, lParam):
         if nCode == HC_ACTION and self._active:
-            # Inspect the key to detect the unlock combo.
             kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-            if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN) and kb.vkCode == VK_U:
-                ctrl_down = user32.GetKeyState(VK_CONTROL) & 0x8000
-                alt_down = user32.GetKeyState(VK_MENU) & 0x8000
-                if ctrl_down and alt_down:
-                    # Fire the unlock callback; still swallow this keystroke.
-                    try:
-                        self._on_unlock_hotkey()
-                    except Exception:
-                        pass
+            vk = kb.vkCode
+            is_down = wParam in (WM_KEYDOWN, WM_SYSKEYDOWN)
+
+            # Track Ctrl / Alt state ourselves. GetKeyState() reads per-thread
+            # state (never updated, because we swallow every key), and
+            # GetAsyncKeyState() ALSO reads 0 here for the same reason:
+            # swallowing a keydown stops Windows from updating its key-state
+            # table. Watching the modifier keydown/keyup events directly is the
+            # only reliable approach.
+            if vk in _CTRL_VKS:
+                self._ctrl_down = is_down
+            elif vk in _ALT_VKS:
+                self._alt_down = is_down
+
+            # Unlock combo: Ctrl + Alt + O (detected inside the hook, so it
+            # fires even though every other key is blocked).
+            if is_down and vk == VK_O and self._ctrl_down and self._alt_down:
+                try:
+                    self._on_unlock_hotkey()
+                except Exception:
+                    pass
+
             # Swallow EVERY keyboard event while active.
             return 1
         return user32.CallNextHookEx(None, nCode, wParam, lParam)
@@ -186,6 +212,11 @@ class InputBlocker:
     # ---- public API (called from the Tk thread) -------------------------- #
     def start(self):
         """Install the hooks and begin swallowing input. Returns True on success."""
+        # Fresh lock: assume no modifier is held (we can't see keys pressed
+        # while the hook was inactive).
+        self._ctrl_down = False
+        self._alt_down = False
+
         if self._thread and self._thread.is_alive():
             self._active = True
             return True
@@ -222,7 +253,7 @@ class InputBlocker:
 # --------------------------------------------------------------------------- #
 class KeyFreezeApp:
     DEFAULT_COUNTDOWN = 5          # seconds before input is blocked (3..5)
-    SAFETY_TIMEOUT_MIN = 15        # auto-unlock after this many minutes
+    SAFETY_TIMEOUT_MIN = 1        # auto-unlock after this many minutes
 
     def __init__(self, root):
         self.root = root
@@ -236,6 +267,7 @@ class KeyFreezeApp:
         self.blocker = InputBlocker(on_unlock_hotkey=self._request_unlock)
 
         self._overlay = None
+        self._banner = None
         self._cd_label = None
         self._countdown_job = None
         self._poll_job = None
@@ -290,7 +322,7 @@ class KeyFreezeApp:
 
         tk.Label(
             self.root,
-            text="Unlock while locked:  Ctrl + Alt + U\n"
+            text="Unlock while locked:  Ctrl + Alt + O\n"
                  "(Ctrl + Alt + Del also always works.)",
             font=info_font,
             fg="#666",
@@ -348,7 +380,7 @@ class KeyFreezeApp:
         self._unlock_requested.clear()
         self._show_locked_overlay()
         self.status.config(
-            text="LOCKED. Press Ctrl+Alt+U to unlock.", fg="#b00020"
+            text="LOCKED. Press Ctrl+Alt+O to unlock.", fg="#b00020"
         )
 
         # Poll for an unlock request coming from the hook thread.
@@ -359,25 +391,43 @@ class KeyFreezeApp:
         )
 
     def _show_locked_overlay(self):
-        # Reuse the same fullscreen overlay, swap its contents.
-        for child in self._overlay.winfo_children():
-            child.destroy()
+        # IMPORTANT: once input is actually blocked we do NOT cover the screen.
+        # The whole point of KeyFreeze is that the screen stays fully visible
+        # (e.g. so you can keep watching a video) while keyboard & mouse are
+        # disabled. So we tear down the fullscreen countdown overlay and show a
+        # small, non-fullscreen "locked" banner that stays out of the way.
+        self._destroy_overlay()
+        self._show_locked_banner()
+
+    def _show_locked_banner(self):
+        """Tiny always-on-top banner shown while input is locked.
+
+        It occupies only a small strip at the top of the screen so the rest of
+        the display (your video) remains fully visible.
+        """
+        banner = tk.Toplevel(self.root)
+        banner.configure(bg="black")
+        banner.overrideredirect(True)
+        banner.attributes("-topmost", True)
+        try:
+            banner.attributes("-alpha", 0.82)
+        except Exception:
+            pass
+
+        screen_w = banner.winfo_screenwidth()
+        width, height = 520, 44
+        x = (screen_w - width) // 2
+        banner.geometry(f"{width}x{height}+{x}+0")
+
         tk.Label(
-            self._overlay,
-            text="\U0001F512  INPUT LOCKED",
-            font=tkfont.Font(family="Segoe UI", size=60, weight="bold"),
+            banner,
+            text="\U0001F512  INPUT LOCKED \u2014 press  Ctrl + Alt + O  to unlock",
+            font=tkfont.Font(family="Segoe UI", size=12, weight="bold"),
             fg="white",
             bg="black",
-        ).place(relx=0.5, rely=0.42, anchor="center")
-        tk.Label(
-            self._overlay,
-            text="Keyboard and mouse are disabled.\n"
-                 "Press  Ctrl + Alt + U  to unlock.",
-            font=tkfont.Font(family="Segoe UI", size=22),
-            fg="#cccccc",
-            bg="black",
-            justify="center",
-        ).place(relx=0.5, rely=0.60, anchor="center")
+        ).place(relx=0.5, rely=0.5, anchor="center")
+
+        self._banner = banner
 
     def _poll_unlock(self):
         if self._unlock_requested.is_set():
@@ -401,6 +451,7 @@ class KeyFreezeApp:
 
         self.blocker.stop()
         self._destroy_overlay()
+        self._destroy_banner()
         self.lock_btn.config(state="normal")
         self.status.config(text="Unlocked. Ready.", fg="#2d7d46")
 
@@ -421,6 +472,14 @@ class KeyFreezeApp:
             except Exception:
                 pass
             self._overlay = None
+
+    def _destroy_banner(self):
+        if self._banner is not None:
+            try:
+                self._banner.destroy()
+            except Exception:
+                pass
+            self._banner = None
 
     # ---- shutdown -------------------------------------------------------- #
     def _on_close(self):
