@@ -1,0 +1,12 @@
+# KeyFreeze has NO external dependencies.
+#
+# It uses only the Python standard library:
+#   * tkinter  -> GUI (bundled with the official CPython Windows installer)
+#   * ctypes   -> Win32 low-level keyboard/mouse hooks
+#
+# Requirements:
+#   * Windows (uses Win32 user32.dll / kernel32.dll)
+#   * CPython 3.8+  (tested on 3.13)
+#
+# If you later want to build a standalone .exe, install PyInstaller:
+# pyinstaller
